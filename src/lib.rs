@@ -17,9 +17,9 @@ mod bindings {
 use bindings::exports::wasi::http::incoming_handler::Guest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serde_json::Value;
 use std::io::{Read as _, Write as _};
 use wasi::http::types::*;
-use serde_json::Value;
 
 struct LlmFetcher;
 
@@ -112,15 +112,21 @@ impl Guest for LlmFetcher {
                             stream.read_to_end(&mut body).unwrap();
                         }
                         let _ = IncomingBody::finish(response_body);
-                        String::from_utf8_lossy(&body).to_string()
 
-                    //     let completion_response: CreateChatCompletionResponseExt =
-                    //         serde_json::from_slice(&body).unwrap();
-                    //     completion_response
-                    //         .choices
-                    //         .get(0)
-                    //         .and_then(|choice| choice.message.content.clone())
-                    //         .unwrap_or_else(|| "No content found.".to_string())
+                        let output = match serde_json::from_slice::<CreateChatCompletionResponseExt>(
+                            &body,
+                        ) {
+                            Ok(response) => response
+                                .choices
+                                .get(0)
+                                .and_then(|choice| choice.message.content.clone())
+                                .unwrap_or_else(|| "No content found.".to_string()),
+                            Err(e) => {
+                                format!("Failed to deserialize response: {}", e)
+                            }
+                        };
+
+                        output
                     } else {
                         "Failed to consume response body".to_string()
                     }
@@ -159,18 +165,15 @@ impl Guest for LlmFetcher {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ChoiceExt {
-    pub index: u32,
-    pub message: MessageExt,
-    pub finish_reason: Option<FinishReasonExt>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct MessageExt {
-    pub role: String,
-    pub content: Option<String>,
-}
+//may not need to use it for now
+// #[derive(Debug, Deserialize, Serialize, Clone)]
+// pub enum FinishReasonExt {
+//     Eos,
+//     Stop,
+//     Length,
+//     ContentFilter,
+//     FunctionCall,
+// }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CreateChatCompletionResponseExt {
@@ -178,17 +181,29 @@ pub struct CreateChatCompletionResponseExt {
     pub object: String,
     pub created: u64,
     pub model: String,
+    #[serde(default)]
+    pub prompt: Vec<String>, // Assuming prompt is optional or sometimes missing
     pub choices: Vec<ChoiceExt>,
     pub usage: Option<UsageExt>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub enum FinishReasonExt {
-    Eos,
-    Stop,
-    Length,
-    ContentFilter,
-    FunctionCall,
+pub struct ChoiceExt {
+    pub index: u32,
+    pub message: MessageExt,
+    pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>, // Optional if it may or may not be present
+    #[serde(default)]
+    pub logprobs: Option<serde_json::Value>, // Use Value if structure is unknown
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct MessageExt {
+    pub role: String,
+    pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<serde_json::Value>>, // Optional and flexible
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
