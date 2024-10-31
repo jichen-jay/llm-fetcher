@@ -17,52 +17,46 @@ mod bindings {
 use bindings::exports::wasi::http::incoming_handler::Guest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use wasi::http::outgoing_handler;
+use std::io::{Read as _, Write as _};
 use wasi::http::types::*;
-use wasi::io::streams::{InputStream, OutputStream, StreamError};
 
 struct LlmFetcher;
+
 impl Guest for LlmFetcher {
     fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
         let headers = Fields::new();
 
-        let req = OutgoingRequest::new(headers.clone());
+        let content_type_name = "Content-Type".to_string();
+        let content_type_values = vec!["application/json".as_bytes().to_vec()];
+        headers
+            .set(&content_type_name, &content_type_values)
+            .expect("Failed to set Content-Type header");
 
+        let user_agent_name = "User-Agent".to_string();
+        let user_agent_values = vec!["MyClient/1.0.0".as_bytes().to_vec()];
+        headers
+            .set(&user_agent_name, &user_agent_values)
+            .expect("Failed to set User-Agent header");
+
+        let authorization_name = "Authorization".to_string();
+        let api_key = "910950719f4c3282a84ceaac3703764db17fe7734e5f8daa8cc9c8088026bb76";
+        let bearer_token = format!("Bearer {}", api_key);
+        let authorization_values = vec![bearer_token.into_bytes()];
+        headers
+            .set(&authorization_name, &authorization_values)
+            .expect("Failed to set Authorization header");
+
+        let req = OutgoingRequest::new(headers);
         req.set_method(&Method::Post).unwrap();
         req.set_scheme(Some(&Scheme::Https)).unwrap();
         req.set_authority(Some("api.together.xyz")).unwrap();
         req.set_path_with_query(Some("/v1/chat/completions"))
             .unwrap();
 
-        // Set headers
-        headers
-            .set(
-                &"Content-Type".to_string(),
-                &["application/json".as_bytes().to_vec()],
-            )
-            .expect("failed to set Content-Type header");
-
-        headers
-            .set(
-                &"User-Agent".to_string(),
-                &["MyClient/1.0.0".as_bytes().to_vec()],
-            )
-            .expect("failed to set User-Agent header");
-
-        let api_key =
-            std::env::var("TOGETHER_API_KEY").unwrap_or_else(|_| "your_api_key".to_string());
-        let bearer_token = format!("Bearer {}", api_key);
-        headers
-            .set(
-                &"Authorization".to_string(),
-                &[bearer_token.as_bytes().to_vec()],
-            )
-            .expect("failed to set Authorization header");
-
         let body = {
             let messages = json!([
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "tell me a joke from 1900s"}
+                {"role": "user", "content": "tell me a joke"}
             ]);
 
             json!({
@@ -75,123 +69,74 @@ impl Guest for LlmFetcher {
 
         let body_bytes = serde_json::to_vec(&body).unwrap();
 
-        // Write the body bytes to the request
-        let outgoing_body = req.body().unwrap();
-        let output_stream = outgoing_body.write().unwrap();
-        write_all(&output_stream, &body_bytes).expect("Failed to write request body");
+        if let Some(outgoing_body) = req.body().ok() {
+            if let Some(mut write_stream) = outgoing_body.write().ok() {
+                write_stream.write_all(&body_bytes).unwrap();
+                drop(write_stream);
+                OutgoingBody::finish(outgoing_body, None).unwrap();
+            }
+        }
 
-        // Finish the outgoing body
-        OutgoingBody::finish(outgoing_body, None).expect("Failed to finish outgoing body");
-
-        match outgoing_handler::handle(req, None) {
+        let llm_response = match wasi::http::outgoing_handler::handle(req, None) {
             Ok(promise) => {
                 promise.subscribe().block();
-                match promise.get().expect("HTTP request failed") {
-                    Ok(response_result) => {
-                        let response = response_result.expect("Failed to get response");
-                        let status = response.status();
-
-                        let outgoing_response = OutgoingResponse::new(Fields::new());
-                        outgoing_response.set_status_code(status).unwrap();
-
-                        // Read the body from the response
-                        let incoming_body = response.consume().unwrap();
-                        let input_stream = incoming_body.stream().unwrap();
-
-                        let mut body_vec = Vec::new();
-                        read_to_end(&input_stream, &mut body_vec)
-                            .expect("Failed to read response body");
-
-                        if status == 200 {
-                            let response_body = outgoing_response.body().unwrap();
-                            let output_stream = response_body.write().unwrap();
-
-                            let completion_response: CreateChatCompletionResponseExt =
-                                serde_json::from_slice(&body_vec).unwrap_or_else(|e| {
-                                    eprintln!("Deserialization error: {:?}", e);
-                                    CreateChatCompletionResponseExt {
-                                        id: "".to_string(),
-                                        object: "".to_string(),
-                                        created: 0,
-                                        model: "".to_string(),
-                                        choices: vec![],
-                                        usage: None,
-                                    }
-                                });
-
-                            let joke = completion_response
-                                .choices
-                                .get(0)
-                                .and_then(|choice| choice.message.content.clone())
-                                .unwrap_or("No joke found.".to_string());
-
-                            write_all(&output_stream, joke.as_bytes()).unwrap();
-
-                            drop(output_stream);
-
-                            OutgoingBody::finish(response_body, None)
-                                .expect("failed to finish response body");
-                        } else {
-                            let response_body = outgoing_response.body().unwrap();
-                            let output_stream = response_body.write().unwrap();
-                            write_all(&output_stream, &body_vec).unwrap();
-                            drop(output_stream);
-
-                            OutgoingBody::finish(response_body, None)
-                                .expect("failed to finish response body");
+                let response = promise
+                    .get()
+                    .expect("Failed to get response promise")
+                    .expect("Failed to get response")
+                    .expect("HTTP request failed");
+                if response.status() == 200 {
+                    if let Some(response_body) = response.consume().ok() {
+                        let mut body = Vec::new();
+                        if let Some(mut stream) = response_body.stream().ok() {
+                            stream.read_to_end(&mut body).unwrap();
                         }
-
-                        ResponseOutparam::set(response_out, Ok(outgoing_response));
+                        let _ = IncomingBody::finish(response_body);
+                        let completion_response: CreateChatCompletionResponseExt =
+                            serde_json::from_slice(&body).unwrap();
+                        completion_response
+                            .choices
+                            .get(0)
+                            .and_then(|choice| choice.message.content.clone())
+                            .unwrap_or_else(|| "No content found.".to_string())
+                    } else {
+                        "Failed to consume response body".to_string()
                     }
-                    Err(e) => {
-                        let outgoing_response = OutgoingResponse::new(Fields::new());
-                        outgoing_response.set_status_code(500).unwrap();
-                        let response_body = outgoing_response.body().unwrap();
-                        let output_stream = response_body.write().unwrap();
-                        let error_message = format!("HTTP request error: {:?}", e);
-                        write_all(&output_stream, error_message.as_bytes()).unwrap();
-                        drop(output_stream);
-
-                        OutgoingBody::finish(response_body, None)
-                            .expect("failed to finish response body");
-
-                        ResponseOutparam::set(response_out, Ok(outgoing_response));
+                } else {
+                    if let Some(response_body) = response.consume().ok() {
+                        let mut body = Vec::new();
+                        if let Some(mut stream) = response_body.stream().ok() {
+                            stream.read_to_end(&mut body).unwrap();
+                        }
+                        let _ = IncomingBody::finish(response_body);
+                        let error_message = String::from_utf8_lossy(&body).to_string();
+                        format!(
+                            "HTTP request failed with status code {}: {}",
+                            response.status(),
+                            error_message
+                        )
+                    } else {
+                        format!("HTTP request failed with status code {}", response.status())
                     }
                 }
             }
-            Err(e) => {
-                // Handle error from `handle` function
-                eprintln!("Error handling request: {:?}", e);
-            }
-        }
+            Err(e) => format!("Error during HTTP request: {}", e),
+        };
+
+        let response = OutgoingResponse::new(Fields::new());
+        response.set_status_code(200).unwrap();
+        let response_body = response.body().unwrap();
+        let mut write_stream = response_body.write().unwrap();
+
+        write_stream.write_all(llm_response.as_bytes()).unwrap();
+        drop(write_stream);
+
+        OutgoingBody::finish(response_body, None).expect("failed to finish response body");
+
+        ResponseOutparam::set(response_out, Ok(response));
     }
 }
 
-// Implement the write_all function
-fn write_all(stream: &OutputStream, data: &[u8]) -> Result<(), StreamError> {
-    let mut offset = 0;
-    while offset < data.len() {
-        let chunk_size = std::cmp::min(4096, data.len() - offset);
-        let chunk = &data[offset..offset + chunk_size];
-        stream.blocking_write_and_flush(chunk)?;
-        offset += chunk_size;
-    }
-    Ok(())
-}
-
-// Implement the read_to_end function
-fn read_to_end(stream: &InputStream, buffer: &mut Vec<u8>) -> Result<(), StreamError> {
-    loop {
-        let bytes = stream.blocking_read(4096)?;
-        if bytes.is_empty() {
-            break; // End of stream
-        }
-        buffer.extend_from_slice(&bytes);
-    }
-    Ok(())
-}
-
-// Your struct definitions
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ChoiceExt {
     pub index: u32,
@@ -217,6 +162,7 @@ pub struct CreateChatCompletionResponseExt {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub enum FinishReasonExt {
+    Eos,
     Stop,
     Length,
     ContentFilter,
