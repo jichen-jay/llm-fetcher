@@ -39,7 +39,7 @@ impl Guest for LlmFetcher {
             .expect("Failed to set User-Agent header");
 
         let authorization_name = "Authorization".to_string();
-        let api_key = "910950719f4c3282a84ceaac3703764db17fe7734e5f8daa8cc9c8088026bb76";
+        let api_key = std::env::var("TOGETHER_API_KEY").unwrap(); 
         let bearer_token = format!("Bearer {}", api_key);
         let authorization_values = vec![bearer_token.into_bytes()];
         headers
@@ -92,13 +92,16 @@ impl Guest for LlmFetcher {
                             stream.read_to_end(&mut body).unwrap();
                         }
                         let _ = IncomingBody::finish(response_body);
-                        let completion_response: CreateChatCompletionResponseExt =
-                            serde_json::from_slice(&body).unwrap();
-                        completion_response
-                            .choices
-                            .get(0)
-                            .and_then(|choice| choice.message.content.clone())
-                            .unwrap_or_else(|| "No content found.".to_string())
+                        String::from_utf8_lossy(&body).to_string()
+
+                        
+                    //     let completion_response: CreateChatCompletionResponseExt =
+                    //         serde_json::from_slice(&body).unwrap();
+                    //     completion_response
+                    //         .choices
+                    //         .get(0)
+                    //         .and_then(|choice| choice.message.content.clone())
+                    //         .unwrap_or_else(|| "No content found.".to_string())
                     } else {
                         "Failed to consume response body".to_string()
                     }
