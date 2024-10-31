@@ -19,11 +19,30 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{Read as _, Write as _};
 use wasi::http::types::*;
+use serde_json::Value;
 
 struct LlmFetcher;
 
 impl Guest for LlmFetcher {
-    fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
+    fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
+        let mut user_input = String::new();
+        if let Some(inp) = request.consume().ok() {
+            let mut body = Vec::new();
+            if let Some(mut stream) = inp.stream().ok() {
+                stream.read_to_end(&mut body).unwrap();
+            }
+            let _ = IncomingBody::finish(inp);
+            let body_str = String::from_utf8_lossy(&body);
+            if let Ok(json) = serde_json::from_str::<Value>(&body_str) {
+                if let Some(text) = json.get("text").and_then(Value::as_str) {
+                    user_input = text.to_string();
+                    println!("User input: {}", user_input);
+                }
+            } else {
+                println!("Failed to parse JSON");
+            }
+        }
+
         let headers = Fields::new();
 
         let content_type_name = "Content-Type".to_string();
@@ -39,7 +58,7 @@ impl Guest for LlmFetcher {
             .expect("Failed to set User-Agent header");
 
         let authorization_name = "Authorization".to_string();
-        let api_key = std::env::var("TOGETHER_API_KEY").unwrap(); 
+        let api_key = std::env::var("TOGETHER_API_KEY").unwrap();
         let bearer_token = format!("Bearer {}", api_key);
         let authorization_values = vec![bearer_token.into_bytes()];
         headers
@@ -56,9 +75,10 @@ impl Guest for LlmFetcher {
         let body = {
             let messages = json!([
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "tell me a joke"}
+                {"role": "user", "content": user_input}
             ]);
 
+            println!("msg: {:?}", user_input.to_string());
             json!({
                 "model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
                 "messages": messages,
@@ -94,7 +114,6 @@ impl Guest for LlmFetcher {
                         let _ = IncomingBody::finish(response_body);
                         String::from_utf8_lossy(&body).to_string()
 
-                        
                     //     let completion_response: CreateChatCompletionResponseExt =
                     //         serde_json::from_slice(&body).unwrap();
                     //     completion_response
