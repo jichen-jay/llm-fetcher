@@ -1,25 +1,40 @@
-mod bindings {
-    use crate::LlmFetcher;
+// mod bindings {
+//     use crate::LlmFetcher;
 
-    wit_bindgen::generate!({
-        with: {
-            "wasi:clocks/monotonic-clock@0.2.2": ::wasi::clocks::monotonic_clock,
-            "wasi:http/incoming-handler@0.2.2": generate,
-            "wasi:http/outgoing-handler@0.2.2": ::wasi::http::outgoing_handler,
-            "wasi:http/types@0.2.2": ::wasi::http::types,
-            "wasi:io/error@0.2.2": ::wasi::io::error,
-            "wasi:io/streams@0.2.2": ::wasi::io::streams,
-            "wasi:io/poll@0.2.2": ::wasi::io::poll,
-        }
-    });
-    export!(LlmFetcher);
-}
-use bindings::exports::wasi::http::incoming_handler::Guest;
+//     wit_bindgen::generate!({
+//         with: {
+//             "wasi:clocks/monotonic-clock@0.2.2": ::wasi::clocks::monotonic_clock,
+//             "wasi:http/incoming-handler@0.2.2": generate,
+//             "wasi:http/outgoing-handler@0.2.2": ::wasi::http::outgoing_handler,
+//             "wasi:http/types@0.2.2": ::wasi::http::types,
+//             "wasi:io/error@0.2.2": ::wasi::io::error,
+//             "wasi:io/streams@0.2.2": ::wasi::io::streams,
+//             "wasi:io/poll@0.2.2": ::wasi::io::poll,
+//         }
+//     });
+//     export!(LlmFetcher);
+// }
+use wasmcloud_component::wasi::exports::http::incoming_handler::Guest;
+use wasmcloud_component::wasi::http::types::{IncomingRequest, OutgoingRequest, ResponseOutparam, IncomingBody, Fields, OutgoingResponse, Method, Scheme, OutgoingBody};
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::io::{Read as _, Write as _};
-use wasi::http::types::*;
+// use wasmcloud_component::http::{self, Server, Response, ErrorCode, OutgoingBody};
+// use wasmcloud_component::wasi::exports::http::incoming_handler::Guest;
+// use wasmcloud_component::wasi::http::types::{
+//     Fields, IncomingBody, IncomingRequest, Method, OutgoingRequest, OutgoingResponse,
+//     ResponseOutparam, Scheme,
+// };
+
+// struct LlmFetcher;
+
+// impl http::Server for LlmFetcher {
+//     fn handle(request: IncomingRequest) -> Result<Response<impl OutgoingBody>, ErrorCode> {
+//         let mut user_input = String::new();
+//         if let Some(inp) = request.consume().ok() {
+
 
 struct LlmFetcher;
 
@@ -212,3 +227,5 @@ pub struct UsageExt {
     pub completion_tokens: u32,
     pub total_tokens: u32,
 }
+
+http::export!(LlmFetcher);
